@@ -1,0 +1,1000 @@
+// Shared bulk-campaigns panel.
+// - In dashboard mode: scope="restaurant", restaurantId required.
+// - In admin mode: scope="admin", with multi-restaurant filter.
+import { uploadToR2 } from "@/lib/r2Upload";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { usePermissions } from "@/hooks/usePermissions";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Lock } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Send, Play, Pause, Plus, Search, Filter, X, Trash2, Users, Pencil, RotateCcw, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { unmaskPhone } from "@/lib/format";
+import { RestaurantMultiSelect, useRestaurants } from "@/components/admin/RestaurantMultiSelect";
+import { Select as RSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const sb = supabase as any;
+
+type ClientType = "elite" | "best" | "frequent" | "new" | "none";
+type ClientStatus = "active" | "inactive" | "sleeping" | "risk";
+
+const TYPE_LABELS: Record<ClientType, string> = {
+  elite: "Comprador Elite (+8)", best: "Melhor Comprador (5–7)",
+  frequent: "Comprador Frequente (3–4)", new: "Novo Cliente (1–2)", none: "Sem pedido",
+};
+const STATUS_LABELS: Record<ClientStatus, string> = {
+  active: "Ativo (≤15 dias)", inactive: "Inativo (16–30 dias)",
+  sleeping: "Dormindo (31–90 dias)", risk: "Em risco (+90 dias)",
+};
+function getClientType(o: number): ClientType { if (o >= 8) return "elite"; if (o >= 5) return "best"; if (o >= 3) return "frequent"; if (o >= 1) return "new"; return "none"; }
+function getClientStatus(t: string | null): ClientStatus | null {
+  if (!t) return null; const d = (Date.now() - new Date(t).getTime()) / 86400000;
+  if (d <= 15) return "active"; if (d <= 30) return "inactive"; if (d <= 90) return "sleeping"; return "risk";
+}
+
+const STATUS_BADGE: Record<string, string> = {
+  draft: "bg-muted text-foreground",
+  running: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200",
+  paused: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200",
+  completed: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200",
+  failed: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200",
+};
+const STATUS_LABEL: Record<string, string> = {
+  draft: "Rascunho", running: "Em execução", paused: "Pausada", completed: "Concluída", failed: "Falhou",
+};
+
+const RECIP_BADGE: Record<string, string> = {
+  pending: "bg-muted text-foreground",
+  sent: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200",
+  failed: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200",
+  skipped: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200",
+};
+
+export function BulkCampaignsPanel({
+  scope, restaurantId,
+}: { scope: "restaurant" | "admin"; restaurantId?: string }) {
+  const qc = useQueryClient();
+  const { can } = usePermissions(scope === "restaurant" ? restaurantId : undefined);
+  const canEdit = scope === "admin" ? true : can("marketing.bulk.edit");
+  const restaurantsQ = useRestaurants();
+  const allRest = restaurantsQ.data ?? [];
+  const [adminFilter, setAdminFilter] = useState<string[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [preparing, setPreparing] = useState<string | null>(null); // "new" | campaign.id
+
+  const filterIds = scope === "admin" ? adminFilter : [restaurantId!];
+  const filterKey = filterIds.slice().sort().join(",");
+
+  // Per-restaurant bulk_campaigns_enabled flag
+  const { data: restEnabled } = useQuery({
+    queryKey: ["bulk-enabled", restaurantId],
+    enabled: scope === "restaurant" && !!restaurantId,
+    queryFn: async () => {
+      const { data } = await sb.from("restaurants").select("bulk_campaigns_enabled").eq("id", restaurantId).maybeSingle();
+      return (data?.bulk_campaigns_enabled ?? true) as boolean;
+    },
+  });
+  const bulkDisabled = scope === "restaurant" && restEnabled === false;
+
+  const singleAdminTarget = scope === "admin" && adminFilter.length === 1 ? adminFilter[0] : null;
+  const { data: adminTargetEnabled } = useQuery({
+    queryKey: ["bulk-enabled-admin", singleAdminTarget],
+    enabled: !!singleAdminTarget,
+    queryFn: async () => {
+      const { data } = await sb.from("restaurants").select("bulk_campaigns_enabled").eq("id", singleAdminTarget).maybeSingle();
+      return (data?.bulk_campaigns_enabled ?? true) as boolean;
+    },
+  });
+
+  const toggleRestaurantBulk = async (next: boolean) => {
+    if (!singleAdminTarget) return;
+    const { error } = await sb.from("restaurants").update({ bulk_campaigns_enabled: next }).eq("id", singleAdminTarget);
+    if (error) return toast.error(error.message);
+    toast.success(next ? "Envio em massa habilitado para o restaurante" : "Envio em massa desabilitado para o restaurante");
+    qc.invalidateQueries({ queryKey: ["bulk-enabled-admin", singleAdminTarget] });
+    qc.invalidateQueries({ queryKey: ["bulk-enabled", singleAdminTarget] });
+  };
+
+  const { data: campaigns, isLoading } = useQuery({
+    queryKey: ["bulk-campaigns", scope, filterKey],
+    enabled: scope === "restaurant" ? !!restaurantId : true,
+    refetchInterval: 5000,
+    queryFn: async () => {
+      let q = sb.from("bulk_campaigns").select("*").order("created_at", { ascending: false }).limit(200);
+      if (scope === "restaurant") {
+        q = q.eq("restaurant_id", restaurantId);
+      } else if (adminFilter.length > 0) {
+        const ids = adminFilter.map((id) => `"${id}"`).join(",");
+        q = q.or(`is_admin.eq.true,restaurant_id.in.(${ids})`);
+      } else {
+        q = q.eq("is_admin", true);
+      }
+      const { data } = await q;
+      return data ?? [];
+    },
+  });
+
+  const restNameById = useMemo(() => { const m = new Map<string,string>(); allRest.forEach(r=>m.set(r.id,r.name)); return m; }, [allRest]);
+
+  const setStatus = async (id: string, status: "running" | "paused") => {
+    if (!canEdit) return toast.error("Sem permissão para alterar campanha");
+    const patch: any = { status };
+    if (status === "running") patch.started_at = new Date().toISOString();
+    const { error } = await sb.from("bulk_campaigns").update(patch).eq("id", id);
+    if (error) return toast.error(error.message);
+    if (status === "running") {
+      supabase.functions.invoke("bulk-campaign-worker", { body: {} }).catch(() => {});
+      toast.success("Campanha iniciada");
+    } else toast.success("Campanha pausada");
+    qc.invalidateQueries({ queryKey: ["bulk-campaigns"] });
+  };
+
+  const clearAutoPause = async (id: string) => {
+    if (!canEdit) return toast.error("Sem permissão para alterar campanha");
+    const { error } = await sb.from("bulk_campaigns").update({ paused_until: null, sent_in_block: 0 }).eq("id", id);
+    if (error) return toast.error(error.message);
+    supabase.functions.invoke("bulk-campaign-worker", { body: {} }).catch(() => {});
+    toast.success("Pausa removida");
+    qc.invalidateQueries({ queryKey: ["bulk-campaigns"] });
+  };
+
+  const remove = async (id: string) => {
+    if (!canEdit) return toast.error("Sem permissão para excluir campanha");
+    const { error } = await sb.from("bulk_campaigns").delete().eq("id", id);
+    if (error) return toast.error(error.message);
+    toast.success("Removida");
+    qc.invalidateQueries({ queryKey: ["bulk-campaigns"] });
+  };
+
+  const prefetchCustomers = async (ids: string[]) => {
+    const key = ids.slice().sort().join(",");
+    await qc.fetchQuery({
+      queryKey: ["bulk-pick-customers", key, ""],
+      staleTime: 30_000,
+      queryFn: async () => {
+        const CHUNK = 1000;
+        const all: any[] = [];
+        let from = 0;
+        while (true) {
+          const { data, error } = await sb.from("customers")
+            .select("id, restaurant_id, name, phone, orders_count, last_order_at")
+            .in("restaurant_id", ids)
+            .order("last_order_at", { ascending: false, nullsFirst: false })
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(from, from + CHUNK - 1);
+          if (error) throw error;
+          const rows = data ?? [];
+          all.push(...rows);
+          if (rows.length < CHUNK) break;
+          from += CHUNK;
+        }
+        return all;
+      },
+    });
+  };
+
+  const prefetchRecipients = async (campaignId: string) => {
+    await qc.fetchQuery({
+      queryKey: ["bulk-recipients", campaignId],
+      staleTime: 30_000,
+      queryFn: async () => {
+        const CHUNK = 1000;
+        const all: any[] = [];
+        let from = 0;
+        while (true) {
+          const { data, error } = await sb.from("bulk_campaign_recipients")
+            .select("id, customer_id, name, phone, status, error, sent_at")
+            .eq("campaign_id", campaignId)
+            .order("created_at", { ascending: true })
+            .order("id", { ascending: true })
+            .range(from, from + CHUNK - 1);
+          if (error) throw error;
+          const rows = data ?? [];
+          all.push(...rows);
+          if (rows.length < CHUNK) break;
+          from += CHUNK;
+        }
+        return all;
+      },
+    });
+  };
+
+  const openCreate = async () => {
+    if (!canEdit) return;
+    if (scope === "admin" && adminFilter.length === 0) return;
+    const ids = scope === "admin" ? adminFilter : [restaurantId!];
+    setPreparing("new");
+    try {
+      await prefetchCustomers(ids);
+      setCreateOpen(true);
+    } catch (e: any) {
+      toast.error(e?.message || "Falha ao carregar contatos");
+    } finally {
+      setPreparing(null);
+    }
+  };
+
+  const handleEdit = async (c: any) => {
+    if (!canEdit) return toast.error("Sem permissão para editar campanha");
+    if (preparing) return;
+    if (c.status === "running") {
+      if (!confirm("A campanha está em execução. Ela será pausada para edição. Continuar?")) return;
+      const { error } = await sb.from("bulk_campaigns").update({ status: "paused" }).eq("id", c.id);
+      if (error) return toast.error(error.message);
+      qc.invalidateQueries({ queryKey: ["bulk-campaigns"] });
+    }
+    setPreparing(c.id);
+    try {
+      const ids = scope === "admin" && c.is_admin
+        ? (filterIds.length > 0 ? filterIds : allRest.map((r) => r.id))
+        : [c.restaurant_id];
+      await Promise.all([prefetchCustomers(ids), prefetchRecipients(c.id)]);
+      setEditing(c.status === "running" ? { ...c, status: "paused" } : c);
+    } catch (e: any) {
+      toast.error(e?.message || "Falha ao carregar contatos");
+    } finally {
+      setPreparing(null);
+    }
+  };
+
+
+  return (
+    <div className="space-y-4 relative">
+      {scope === "admin" && (
+        <Card><CardContent className="p-4 space-y-3">
+          <RestaurantMultiSelect all={allRest} selected={adminFilter} onChange={setAdminFilter} />
+          {singleAdminTarget && (
+            <div className="flex items-center justify-between gap-3 border-t pt-3">
+              <div className="text-sm">
+                <div className="font-medium">Envio em massa para este restaurante</div>
+                <div className="text-xs text-muted-foreground">Quando desativado, o restaurante vê a aba borrada com aviso. O admin continua podendo criar campanhas em nome dele.</div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-muted-foreground">{adminTargetEnabled === false ? "Desativado" : "Ativado"}</span>
+                <Switch checked={adminTargetEnabled !== false} onCheckedChange={toggleRestaurantBulk} />
+              </div>
+            </div>
+          )}
+        </CardContent></Card>
+      )}
+
+      {bulkDisabled && (
+        <Alert className="border-yellow-300 bg-yellow-50 dark:bg-yellow-950/40 dark:border-yellow-900">
+          <Lock className="w-4 h-4" />
+          <AlertTitle>Função desativada</AlertTitle>
+          <AlertDescription>
+            O admin do sistema desativou o envio em massa para o seu restaurante. Caso deseje utilizá-la, solicite a ativação pelo admin.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className={bulkDisabled ? "blur-sm pointer-events-none select-none opacity-70" : ""} aria-disabled={bulkDisabled || undefined}>
+
+
+      <Card>
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2"><Send className="w-5 h-5" /> Campanhas</CardTitle>
+            <CardDescription>Crie campanhas, selecione contatos e envie via Evolution API.</CardDescription>
+          </div>
+          {canEdit && (
+          <Button onClick={openCreate} disabled={(scope === "admin" && adminFilter.length === 0) || preparing !== null} className="w-full sm:w-auto">
+            {preparing === "new" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Plus className="w-4 h-4 mr-1" />}
+            {preparing === "new" ? "Carregando contatos..." : "Nova campanha"}
+          </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+          ) : (campaigns ?? []).length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              {scope === "admin" && adminFilter.length === 0
+                ? "Nenhuma campanha. Selecione restaurantes para criar uma nova ou ver campanhas das lojas."
+                : "Nenhuma campanha ainda."}
+            </div>
+          ) : (
+            <>
+              <div className="hidden md:block border rounded-lg overflow-x-auto">
+                <Table>
+                  <TableHeader><TableRow>
+                    <TableHead>Nome</TableHead>
+                    {scope === "admin" && <TableHead>Restaurante</TableHead>}
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-center">Enviados</TableHead>
+                    <TableHead className="text-center">Falhas</TableHead>
+                    <TableHead className="text-center">Total</TableHead>
+                    <TableHead>Criada</TableHead>
+                    <TableHead className="text-right">Ações</TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {(campaigns ?? []).map((c: any) => {
+                      const isAutoPaused = c.paused_until && new Date(c.paused_until).getTime() > Date.now();
+                      return (
+                        <TableRow key={c.id}>
+                          <TableCell className="font-medium">{c.name}</TableCell>
+                          {scope === "admin" && <TableCell>{c.is_admin ? <Badge>Admin</Badge> : <Badge variant="outline">{restNameById.get(c.restaurant_id) ?? "—"}</Badge>}</TableCell>}
+                          <TableCell>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_BADGE[c.status]}`}>{STATUS_LABEL[c.status]}</span>
+                            {c.status === "running" && isAutoPaused && (
+                              <div className="text-[10px] text-yellow-700 dark:text-yellow-300 mt-0.5">
+                                Pausa auto até {new Date(c.paused_until).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-center">{c.sent}</TableCell>
+                          <TableCell className="text-center">{c.failed}</TableCell>
+                          <TableCell className="text-center">{c.total}</TableCell>
+                          <TableCell>{new Date(c.created_at).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              {canEdit && isAutoPaused && (
+                                <Button size="sm" variant="outline" onClick={() => clearAutoPause(c.id)} title="Retomar agora (limpar pausa automática)">
+                                  <RotateCcw className="w-3.5 h-3.5 mr-1" /> Retomar agora
+                                </Button>
+                              )}
+                              {canEdit && (c.status === "draft" || c.status === "paused") && (
+                                <Button size="sm" variant="outline" onClick={() => setStatus(c.id, "running")}>
+                                  <Play className="w-3.5 h-3.5 mr-1" /> Play
+                                </Button>
+                              )}
+                              {canEdit && c.status === "running" && (
+                                <Button size="sm" variant="outline" onClick={() => setStatus(c.id, "paused")}>
+                                  <Pause className="w-3.5 h-3.5 mr-1" /> Pausar
+                                </Button>
+                              )}
+                              {canEdit && c.status !== "completed" && (
+                                <Button size="sm" variant="outline" onClick={() => handleEdit(c)} title="Editar" disabled={preparing !== null}>
+                                  {preparing === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5" />}
+                                </Button>
+                              )}
+                              {canEdit && (
+                              <Button size="sm" variant="outline" className="text-destructive" onClick={() => remove(c.id)}>
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="md:hidden space-y-2">
+                {(campaigns ?? []).map((c: any) => {
+                  const isAutoPaused = c.paused_until && new Date(c.paused_until).getTime() > Date.now();
+                  return (
+                    <div key={c.id} className="border rounded-lg p-3 space-y-2 bg-card">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium truncate">{c.name}</div>
+                          <div className="text-[11px] text-muted-foreground">{new Date(c.created_at).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}</div>
+                        </div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full shrink-0 ${STATUS_BADGE[c.status]}`}>{STATUS_LABEL[c.status]}</span>
+                      </div>
+                      {scope === "admin" && (
+                        <div>{c.is_admin ? <Badge>Admin</Badge> : <Badge variant="outline">{restNameById.get(c.restaurant_id) ?? "—"}</Badge>}</div>
+                      )}
+                      {c.status === "running" && isAutoPaused && (
+                        <div className="text-[10px] text-yellow-700 dark:text-yellow-300">
+                          Pausa auto até {new Date(c.paused_until).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs border-t pt-2">
+                        <div><div className="font-semibold">{c.sent}</div><div className="text-muted-foreground text-[10px]">Enviados</div></div>
+                        <div><div className="font-semibold">{c.failed}</div><div className="text-muted-foreground text-[10px]">Falhas</div></div>
+                        <div><div className="font-semibold">{c.total}</div><div className="text-muted-foreground text-[10px]">Total</div></div>
+                      </div>
+                      <div className="flex flex-wrap gap-1 border-t pt-2">
+                        {canEdit && isAutoPaused && (
+                          <Button size="sm" variant="outline" onClick={() => clearAutoPause(c.id)} className="flex-1">
+                            <RotateCcw className="w-3.5 h-3.5 mr-1" /> Retomar
+                          </Button>
+                        )}
+                        {canEdit && (c.status === "draft" || c.status === "paused") && (
+                          <Button size="sm" variant="outline" onClick={() => setStatus(c.id, "running")} className="flex-1">
+                            <Play className="w-3.5 h-3.5 mr-1" /> Play
+                          </Button>
+                        )}
+                        {canEdit && c.status === "running" && (
+                          <Button size="sm" variant="outline" onClick={() => setStatus(c.id, "paused")} className="flex-1">
+                            <Pause className="w-3.5 h-3.5 mr-1" /> Pausar
+                          </Button>
+                        )}
+                        {canEdit && c.status !== "completed" && (
+                          <Button size="sm" variant="outline" onClick={() => handleEdit(c)} disabled={preparing !== null}>
+                            {preparing === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5" />}
+                          </Button>
+                        )}
+                        {canEdit && (
+                          <Button size="sm" variant="outline" className="text-destructive" onClick={() => remove(c.id)}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+      </div>
+
+
+
+      {createOpen && (
+        <CampaignDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          scope={scope}
+          restaurantIds={scope === "admin" ? adminFilter : [restaurantId!]}
+          allRest={allRest}
+          onSaved={() => qc.invalidateQueries({ queryKey: ["bulk-campaigns"] })}
+        />
+      )}
+      {editing && (
+        <CampaignDialog
+          open={!!editing}
+          onOpenChange={(o) => !o && setEditing(null)}
+          scope={scope}
+          restaurantIds={scope === "admin" && editing.is_admin ? (filterIds.length > 0 ? filterIds : allRest.map((r) => r.id)) : [editing.restaurant_id]}
+          allRest={allRest}
+          campaign={editing}
+          onSaved={() => qc.invalidateQueries({ queryKey: ["bulk-campaigns"] })}
+        />
+      )}
+    </div>
+  );
+}
+
+function CampaignDialog({
+  open, onOpenChange, scope, restaurantIds, allRest, onSaved, campaign,
+}: {
+  open: boolean; onOpenChange: (o: boolean) => void;
+  scope: "restaurant" | "admin"; restaurantIds: string[];
+  allRest: { id: string; name: string }[];
+  onSaved: () => void;
+  campaign?: any;
+}) {
+  const isEdit = !!campaign;
+  const [name, setName] = useState(campaign?.name ?? "");
+  const [text, setText] = useState(campaign?.message_text ?? "");
+  const [mediaUrl, setMediaUrl] = useState(campaign?.media_url ?? "");
+  const [interval, setInterval] = useState(campaign?.interval_seconds ?? 8);
+  const [pauseAfter, setPauseAfter] = useState(campaign?.pause_after_messages ?? 0);
+  const [pauseMinutes, setPauseMinutes] = useState(campaign?.pause_duration_minutes ?? 0);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  const [typeFilters, setTypeFilters] = useState<Set<ClientType>>(new Set());
+  const [statusFilters, setStatusFilters] = useState<Set<ClientStatus>>(new Set());
+  const [restaurantFilters, setRestaurantFilters] = useState<Set<string>>(new Set());
+  const [letterRanges, setLetterRanges] = useState<Array<{ start: string; end: string }>>([]);
+  const [letterDraftStart, setLetterDraftStart] = useState<string>("");
+  const [letterDraftEnd, setLetterDraftEnd] = useState<string>("");
+  const [dateRanges, setDateRanges] = useState<Array<{ from: string; to: string }>>([]);
+  const [dateDraftFrom, setDateDraftFrom] = useState<string>("");
+  const [dateDraftTo, setDateDraftTo] = useState<string>("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [removedRecipientIds, setRemovedRecipientIds] = useState<Set<string>>(new Set());
+  // Sender mode in admin scope: "admin" uses admin's own integration; "restaurant" uses a specific store's integration
+  const [senderMode, setSenderMode] = useState<"admin" | "restaurant">(
+    campaign?.is_admin ? "admin" : "restaurant"
+  );
+  const [targetRestaurant, setTargetRestaurant] = useState<string>(
+    campaign?.restaurant_id ?? (scope === "restaurant" ? restaurantIds[0] : "")
+  );
+  const [saving, setSaving] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const idsKey = restaurantIds.slice().sort().join(",");
+  const { data: customers, isLoading } = useQuery({
+    queryKey: ["bulk-pick-customers", idsKey, debouncedSearch],
+    enabled: open && restaurantIds.length > 0,
+    queryFn: async () => {
+      const term = debouncedSearch;
+      const buildQuery = () => {
+        let q = sb.from("customers")
+          .select("id, restaurant_id, name, phone, orders_count, last_order_at")
+          .in("restaurant_id", restaurantIds);
+        if (term.length >= 2) {
+          const safe = term.replace(/[%,()]/g, " ").trim();
+          const digits = term.replace(/\D/g, "");
+          const phonePattern = digits.length >= 2 ? "%" + digits.split("").join("%") + "%" : null;
+          const orParts = [`name.ilike.%${safe}%`];
+          if (phonePattern) orParts.push(`phone.ilike.${phonePattern}`);
+          q = q.or(orParts.join(","));
+        }
+        return q.order("last_order_at", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }).order("id", { ascending: true });
+      };
+      const CHUNK = 1000;
+      const all: any[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await buildQuery().range(from, from + CHUNK - 1);
+        if (error) throw error;
+        const rows = data ?? [];
+        all.push(...rows);
+        if (rows.length < CHUNK) break;
+        from += CHUNK;
+      }
+      return all;
+    },
+  });
+
+  // In edit mode, load existing recipients
+  const { data: existingRecipients } = useQuery({
+    queryKey: ["bulk-recipients", campaign?.id],
+    enabled: open && isEdit,
+    queryFn: async () => {
+      const CHUNK = 1000;
+      const all: any[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await sb.from("bulk_campaign_recipients")
+          .select("id, customer_id, name, phone, status, error, sent_at")
+          .eq("campaign_id", campaign.id)
+          .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
+          .range(from, from + CHUNK - 1);
+        if (error) throw error;
+        const rows = data ?? [];
+        all.push(...rows);
+        if (rows.length < CHUNK) break;
+        from += CHUNK;
+      }
+      return all;
+    },
+  });
+
+  // Skip already-included customers from the picker
+  const existingCustomerIds = useMemo(() => {
+    const s = new Set<string>();
+    (existingRecipients ?? []).forEach((r: any) => {
+      if (r.customer_id && !removedRecipientIds.has(r.id)) s.add(r.customer_id);
+    });
+    return s;
+  }, [existingRecipients, removedRecipientIds]);
+
+  const restNameById = useMemo(() => { const m = new Map<string,string>(); allRest.forEach(r=>m.set(r.id,r.name)); return m; }, [allRest]);
+
+  const normalizeLetter = (s: string) => {
+    const c = (s || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    return c.charAt(0);
+  };
+  const letterRangesNorm = letterRanges.map(r => ({ start: r.start.toUpperCase(), end: (r.end || r.start).toUpperCase() }));
+  const dateRangesNorm = dateRanges.map(r => ({
+    from: r.from ? new Date(r.from + "T00:00:00").getTime() : null,
+    to: r.to ? new Date(r.to + "T23:59:59").getTime() : null,
+  }));
+
+  const filtered = (customers ?? []).filter((c: any) => {
+    if (existingCustomerIds.has(c.id)) return false;
+    if (restaurantFilters.size > 0 && !restaurantFilters.has(c.restaurant_id)) return false;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      if (!(c.name?.toLowerCase().includes(q) || unmaskPhone(c.phone || "").includes(unmaskPhone(search)))) return false;
+    }
+    if (typeFilters.size > 0 && !typeFilters.has(getClientType(c.orders_count))) return false;
+    if (statusFilters.size > 0) { const s = getClientStatus(c.last_order_at); if (!s || !statusFilters.has(s)) return false; }
+    if (letterRangesNorm.length > 0) {
+      const fl = normalizeLetter(c.name || "");
+      if (!fl || !letterRangesNorm.some(r => fl >= r.start && fl <= r.end)) return false;
+    }
+    if (dateRangesNorm.length > 0) {
+      if (!c.last_order_at) return false;
+      const t = new Date(c.last_order_at).getTime();
+      if (!dateRangesNorm.some(r => (r.from === null || t >= r.from) && (r.to === null || t <= r.to))) return false;
+    }
+    return true;
+  });
+
+  const togglePick = (id: string) => { const n = new Set(picked); n.has(id) ? n.delete(id) : n.add(id); setPicked(n); };
+  const pickAllVisible = () => { const n = new Set(picked); filtered.forEach((c: any) => n.add(c.id)); setPicked(n); };
+  const clearAll = () => setPicked(new Set());
+  const toggleType = (t: ClientType) => { const n = new Set(typeFilters); n.has(t) ? n.delete(t) : n.add(t); setTypeFilters(n); };
+  const toggleStatus = (s: ClientStatus) => { const n = new Set(statusFilters); n.has(s) ? n.delete(s) : n.add(s); setStatusFilters(n); };
+  const toggleRestaurant = (id: string) => { const n = new Set(restaurantFilters); n.has(id) ? n.delete(id) : n.add(id); setRestaurantFilters(n); };
+
+  const toggleRemoveRecipient = (rid: string) => {
+    const n = new Set(removedRecipientIds);
+    n.has(rid) ? n.delete(rid) : n.add(rid);
+    setRemovedRecipientIds(n);
+  };
+
+  const handleSave = async () => {
+    if (!name.trim()) return toast.error("Informe o nome");
+    if (!text.trim()) return toast.error("Escreva a mensagem");
+
+    const newChosen = (customers ?? []).filter((c: any) => picked.has(c.id));
+    const remainingExisting = (existingRecipients ?? []).filter((r: any) => !removedRecipientIds.has(r.id)).length;
+    const newTotal = remainingExisting + newChosen.length;
+
+    if (!isEdit && newChosen.length === 0) return toast.error("Selecione ao menos 1 contato");
+    if (isEdit && newTotal === 0) return toast.error("A campanha precisa ter ao menos 1 contato");
+    if (!isEdit && scope === "admin" && senderMode === "restaurant" && !targetRestaurant) return toast.error("Selecione o restaurante para a campanha");
+
+    setSaving(true);
+    try {
+      if (isEdit) {
+        // Update campaign fields
+        const { error: uErr } = await sb.from("bulk_campaigns").update({
+          name, message_text: text, media_url: mediaUrl || null,
+          interval_seconds: interval,
+          pause_after_messages: pauseAfter,
+          pause_duration_minutes: pauseMinutes,
+          total: newTotal,
+        }).eq("id", campaign.id);
+        if (uErr) throw uErr;
+
+        // Remove pending recipients flagged for removal
+        if (removedRecipientIds.size > 0) {
+          const ids = Array.from(removedRecipientIds);
+          const { error: dErr } = await sb.from("bulk_campaign_recipients")
+            .delete().in("id", ids).eq("status", "pending");
+          if (dErr) throw dErr;
+        }
+
+        // Insert newly picked
+        if (newChosen.length > 0) {
+          const rows = newChosen.map((c: any) => ({
+            campaign_id: campaign.id, customer_id: c.id, name: c.name, phone: c.phone,
+          }));
+          for (let i = 0; i < rows.length; i += 500) {
+            const { error: e2 } = await sb.from("bulk_campaign_recipients").insert(rows.slice(i, i + 500));
+            if (e2) throw e2;
+          }
+        }
+        toast.success("Campanha atualizada");
+      } else {
+        const useAdmin = scope === "admin" && senderMode === "admin";
+        const { data: camp, error } = await sb.from("bulk_campaigns").insert({
+          restaurant_id: useAdmin ? null : (scope === "admin" ? targetRestaurant : restaurantIds[0]),
+          is_admin: useAdmin,
+          name, message_text: text, media_url: mediaUrl || null,
+          interval_seconds: interval,
+          pause_after_messages: pauseAfter,
+          pause_duration_minutes: pauseMinutes,
+          total: newChosen.length, status: "draft",
+        }).select("id").single();
+        if (error) throw error;
+
+        const rows = newChosen.map((c: any) => ({
+          campaign_id: camp.id, customer_id: c.id, name: c.name, phone: c.phone,
+        }));
+        for (let i = 0; i < rows.length; i += 500) {
+          const { error: e2 } = await sb.from("bulk_campaign_recipients").insert(rows.slice(i, i + 500));
+          if (e2) throw e2;
+        }
+        toast.success("Campanha criada");
+      }
+      onSaved();
+      onOpenChange(false);
+    } catch (e: any) { toast.error(e.message || "Erro"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Editar campanha" : "Nova campanha"}</DialogTitle>
+          <DialogDescription>
+            {isEdit
+              ? "Ajuste a mensagem, intervalo, pausa e destinatários. Quem já recebeu não será reenviado."
+              : <>Selecione contatos e escreva a mensagem. Use {"{nome}"} para personalizar.</>}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Nome da campanha</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Promoção de quarta" />
+            </div>
+            {!isEdit && scope === "admin" && (
+              <>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Enviar usando a integração de</Label>
+                  <RSelect value={senderMode} onValueChange={(v) => setSenderMode(v as "admin" | "restaurant")}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="admin">Minha integração (Admin)</SelectItem>
+                      <SelectItem value="restaurant">Integração de um restaurante</SelectItem>
+                    </SelectContent>
+                  </RSelect>
+                </div>
+                {senderMode === "restaurant" && (
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label>Restaurante (envio será feito pela instância dele)</Label>
+                    <RSelect value={targetRestaurant} onValueChange={setTargetRestaurant}>
+                      <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+                      <SelectContent>
+                        {restaurantIds.map((id) => (
+                          <SelectItem key={id} value={id}>{restNameById.get(id) ?? id}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </RSelect>
+                  </div>
+                )}
+              </>
+            )}
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Mensagem</Label>
+              <Textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="Olá {nome}, temos uma oferta especial..." />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Imagem (opcional)</Label>
+              <div className="flex gap-2">
+                <Input value={mediaUrl} onChange={(e) => setMediaUrl(e.target.value)} placeholder="Cole a URL ou envie um arquivo" />
+                <input
+                  id="campaign-media-file"
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    if (file.size > 8 * 1024 * 1024) return toast.error("Imagem deve ter no máximo 8MB");
+                    setUploading(true);
+                    try {
+                      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+                      const url = await uploadToR2(file, `menu-images/campaigns`, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`);
+                      setMediaUrl(url);
+                      toast.success("Imagem enviada");
+                    } catch (err: any) {
+                      toast.error(err.message || "Falha no upload");
+                    } finally { setUploading(false); }
+                  }}
+                />
+                <Button type="button" variant="outline" disabled={uploading}
+                  onClick={() => document.getElementById("campaign-media-file")?.click()}>
+                  {uploading ? "Enviando..." : "Upload"}
+                </Button>
+              </div>
+              {mediaUrl && (
+                <div className="mt-2 flex items-start gap-2">
+                  <img src={mediaUrl} alt="Prévia" className="h-20 w-20 object-cover rounded border" onError={(e) => ((e.currentTarget.style.display = "none"))} />
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setMediaUrl("")}>
+                    <X className="w-3.5 h-3.5 mr-1" /> Remover
+                  </Button>
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Intervalo entre envios (segundos)</Label>
+              <Input type="number" min={1} value={interval} onChange={(e) => setInterval(Number(e.target.value) || 8)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Pausar a cada N mensagens (0 = desligado)</Label>
+              <Input type="number" min={0} value={pauseAfter} onChange={(e) => setPauseAfter(Math.max(0, Number(e.target.value) || 0))} placeholder="Ex: 100" />
+            </div>
+            <div className="space-y-2">
+              <Label>Duração da pausa (minutos)</Label>
+              <Input type="number" min={0} value={pauseMinutes} onChange={(e) => setPauseMinutes(Math.max(0, Number(e.target.value) || 0))} placeholder="Ex: 60" />
+            </div>
+          </div>
+
+          {isEdit && (existingRecipients ?? []).length > 0 && (
+            <div className="border-t pt-3">
+              <div className="font-medium flex items-center gap-2 mb-2">
+                <Users className="w-4 h-4" /> Destinatários atuais ({(existingRecipients ?? []).length - removedRecipientIds.size} de {(existingRecipients ?? []).length})
+              </div>
+              <div className="text-xs text-muted-foreground mb-2">Apenas destinatários pendentes podem ser removidos.</div>
+              <div className="border rounded-lg max-h-60 overflow-auto">
+                <Table>
+                  <TableBody>
+                    {(existingRecipients ?? []).map((r: any) => {
+                      const removable = r.status === "pending";
+                      const marked = removedRecipientIds.has(r.id);
+                      return (
+                        <TableRow key={r.id} className={marked ? "opacity-50 line-through" : ""}>
+                          <TableCell className="font-medium">{r.name}</TableCell>
+                          <TableCell>{r.phone}</TableCell>
+                          <TableCell>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${RECIP_BADGE[r.status] ?? RECIP_BADGE.pending}`}>{r.status}</span>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {removable ? (
+                              <Button size="sm" variant="ghost" onClick={() => toggleRemoveRecipient(r.id)}>
+                                {marked ? "Manter" : <><X className="w-3.5 h-3.5 mr-1" /> Remover</>}
+                              </Button>
+                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+
+          <div className="border-t pt-3">
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              <div className="font-medium flex items-center gap-2 text-sm">
+                <Users className="w-4 h-4" />
+                {isEdit ? "Adicionar contatos" : "Contatos"} ({picked.size} selecionados)
+              </div>
+              <div className="flex gap-1">
+                <Button size="sm" variant="outline" onClick={pickAllVisible} className="text-xs">Selecionar visíveis</Button>
+                <Button size="sm" variant="outline" onClick={clearAll} className="text-xs">Limpar</Button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-2">
+              <div className="relative flex-1 min-w-[160px]">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input className="pl-9" placeholder="Buscar nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+              <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>
+                <Button variant="outline" size="sm" onClick={() => setFiltersOpen(true)}>
+                  <Filter className="w-4 h-4 mr-1" /> Filtros
+                  {(() => { const n = typeFilters.size + statusFilters.size + restaurantFilters.size + letterRanges.length + dateRanges.length; return n > 0 && <Badge variant="secondary" className="ml-2">{n}</Badge>; })()}
+                </Button>
+                <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto overscroll-contain">
+                  <DialogHeader>
+                    <DialogTitle>Filtros</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Tipo</div>
+                      {(Object.keys(TYPE_LABELS) as ClientType[]).map(t => (
+                        <label key={t} className="flex items-center gap-2 text-sm cursor-pointer">
+                          <Checkbox checked={typeFilters.has(t)} onCheckedChange={() => toggleType(t)} />
+                          {TYPE_LABELS[t]}
+                        </label>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Status</div>
+                      {(Object.keys(STATUS_LABELS) as ClientStatus[]).map(s => (
+                        <label key={s} className="flex items-center gap-2 text-sm cursor-pointer">
+                          <Checkbox checked={statusFilters.has(s)} onCheckedChange={() => toggleStatus(s)} />
+                          {STATUS_LABELS[s]}
+                        </label>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Letra inicial do nome</div>
+                      {letterRanges.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {letterRanges.map((r, i) => (
+                            <Badge key={i} variant="secondary" className="gap-1">
+                              {r.start === r.end || !r.end ? r.start : `${r.start}–${r.end}`}
+                              <button onClick={() => setLetterRanges(letterRanges.filter((_, j) => j !== i))}><X className="w-3 h-3" /></button>
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <RSelect value={letterDraftStart || "__none__"} onValueChange={(v) => { const nv = v === "__none__" ? "" : v; setLetterDraftStart(nv); if (!nv) setLetterDraftEnd(""); }}>
+                          <SelectTrigger className="h-8"><SelectValue placeholder="De" /></SelectTrigger>
+                          <SelectContent className="max-h-60">
+                            <SelectItem value="__none__">—</SelectItem>
+                            {Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)).map(l => (
+                              <SelectItem key={l} value={l}>{l}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </RSelect>
+                        <span className="text-xs text-muted-foreground">até</span>
+                        <RSelect value={letterDraftEnd || "__none__"} onValueChange={(v) => setLetterDraftEnd(v === "__none__" ? "" : v)} disabled={!letterDraftStart}>
+                          <SelectTrigger className="h-8"><SelectValue placeholder={letterDraftStart || "—"} /></SelectTrigger>
+                          <SelectContent className="max-h-60">
+                            <SelectItem value="__none__">{letterDraftStart || "—"}</SelectItem>
+                            {Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i))
+                              .filter(l => !letterDraftStart || l >= letterDraftStart)
+                              .map(l => (<SelectItem key={l} value={l}>{l}</SelectItem>))}
+                          </SelectContent>
+                        </RSelect>
+                        <Button type="button" variant="outline" size="sm" className="h-8" disabled={!letterDraftStart} onClick={() => { setLetterRanges([...letterRanges, { start: letterDraftStart, end: letterDraftEnd || letterDraftStart }]); setLetterDraftStart(""); setLetterDraftEnd(""); }}>+</Button>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-1">Adicione vários intervalos (ex.: A–C e M–P).</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Data do último pedido</div>
+                      {dateRanges.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {dateRanges.map((r, i) => (
+                            <Badge key={i} variant="secondary" className="gap-1">
+                              {r.from || "…"} → {r.to || "…"}
+                              <button onClick={() => setDateRanges(dateRanges.filter((_, j) => j !== i))}><X className="w-3 h-3" /></button>
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs w-8">De</Label>
+                          <Input type="date" className="h-8" value={dateDraftFrom} onChange={(e) => setDateDraftFrom(e.target.value)} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs w-8">Até</Label>
+                          <Input type="date" className="h-8" value={dateDraftTo} onChange={(e) => setDateDraftTo(e.target.value)} />
+                        </div>
+                        <Button type="button" variant="outline" size="sm" className="h-8" disabled={!dateDraftFrom && !dateDraftTo} onClick={() => { setDateRanges([...dateRanges, { from: dateDraftFrom, to: dateDraftTo }]); setDateDraftFrom(""); setDateDraftTo(""); }}>+ Adicionar intervalo</Button>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-1">Adicione vários intervalos de datas.</div>
+                    </div>
+                    {scope === "admin" && restaurantIds.length > 1 && (
+                      <div>
+                        <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Restaurante</div>
+                        <div className="max-h-40 overflow-y-auto space-y-1">
+                          {restaurantIds.map((id) => (
+                            <label key={id} className="flex items-center gap-2 text-sm cursor-pointer">
+                              <Checkbox checked={restaurantFilters.has(id)} onCheckedChange={() => toggleRestaurant(id)} />
+                              <span className="truncate">{restNameById.get(id) ?? id}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {(typeFilters.size + statusFilters.size + restaurantFilters.size + letterRanges.length + dateRanges.length) > 0 && (
+                      <Button variant="ghost" size="sm" className="w-full" onClick={() => { setTypeFilters(new Set()); setStatusFilters(new Set()); setRestaurantFilters(new Set()); setLetterRanges([]); setDateRanges([]); setLetterDraftStart(""); setLetterDraftEnd(""); setDateDraftFrom(""); setDateDraftTo(""); }}>
+                        <X className="w-4 h-4 mr-1" /> Limpar filtros
+                      </Button>
+                    )}
+                  </div>
+                  <DialogFooter>
+                    <Button onClick={() => setFiltersOpen(false)}>Aplicar</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <div className="border rounded-lg max-h-72 overflow-auto">
+              {isLoading ? (
+                <div className="p-4 space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+              ) : filtered.length === 0 ? (
+                <div className="p-4 text-center text-sm text-muted-foreground">Nenhum cliente disponível.</div>
+              ) : (
+                <Table>
+                  <TableBody>
+                    {filtered.map((c: any) => (
+                      <TableRow key={c.id} className="cursor-pointer" onClick={() => togglePick(c.id)}>
+                        <TableCell className="w-10"><Checkbox checked={picked.has(c.id)} onCheckedChange={() => togglePick(c.id)} /></TableCell>
+                        <TableCell className="font-medium">{c.name}</TableCell>
+                        <TableCell>{c.phone}</TableCell>
+                        {scope === "admin" && <TableCell><Badge variant="outline">{restNameById.get(c.restaurant_id) ?? "—"}</Badge></TableCell>}
+                        <TableCell className="text-xs text-muted-foreground">{c.orders_count} ped.</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? "Salvando..." : isEdit ? "Salvar alterações" : "Criar campanha"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
