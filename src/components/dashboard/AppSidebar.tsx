@@ -50,8 +50,8 @@ const mainItems: { id: DashboardView; title: string; icon: any }[] = [
 const marketingItems: { id: DashboardView; title: string; icon: any }[] = [
   { id: "marketing:coupons", title: "Cupons de desconto", icon: Ticket },
   { id: "marketing:bulk", title: "Envio em massa", icon: Send },
-  { id: "marketing:manual-send", title: "Envio Manual", icon: Send },
 ];
+
 
 const loyaltyItem: { id: DashboardView; title: string; icon: any } = {
   id: "marketing:loyalty",
