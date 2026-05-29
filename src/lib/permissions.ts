@@ -73,7 +73,7 @@ export const FULL_PERMISSIONS: Permissions = {
   },
   menu: { view: true, edit: true },
   customers: { view: true, create: true, edit: true, delete: true },
-  marketing: { coupons: { view: true, edit: true, metrics: true }, bulk: { view: true, edit: true }, manual_send: { view: true } },
+  marketing: { coupons: { view: true, edit: true, metrics: true }, bulk: { view: true, edit: true } },
   loyalty: {
     view: true,
     toggle_program: true,
