@@ -313,14 +313,14 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
               <div className="flex gap-2">
                 <Input 
                   readOnly 
-                  value={`${window.location.origin}/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} 
+                  value={`https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} 
                   className="bg-muted font-mono text-xs"
                 />
                 <Button 
                   size="icon" 
                   variant="outline" 
                   onClick={() => {
-                    const url = `${window.location.origin}/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`;
+                    const url = `https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`;
                     navigator.clipboard.writeText(url);
                     toast.success("Link copiado!");
                   }}
@@ -332,7 +332,7 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
                   variant="outline"
                   asChild
                 >
-                  <a href={`/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} target="_blank" rel="noreferrer">
+                  <a href={`https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} target="_blank" rel="noreferrer">
                     <ExternalLink className="w-4 h-4" />
                   </a>
                 </Button>
