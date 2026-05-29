@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { brl, formatPhone, normalizeBrPhone, statusLabelFor } from "@/lib/format";
-import { Plus, Check, Trash2, Award, RefreshCw, Pencil, History, Search, BarChart3, Loader2 } from "lucide-react";
+import { Plus, Check, Trash2, Award, RefreshCw, Pencil, History, Search, BarChart3, Loader2, ExternalLink, Copy } from "lucide-react";
 import { LoyaltyRewardsTab } from "./LoyaltyRewardsTab";
 import { LoyaltyMetricsDialog } from "./LoyaltyMetricsDialog";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -51,8 +51,8 @@ export function LoyaltyPanel({ restaurantId, isAdmin = false }: { restaurantId: 
   // ---- Settings ----
   const settingsQ = useQuery({
     queryKey: ["loyalty-settings", restaurantId],
-    queryFn: async (): Promise<Settings> => {
-      const { data } = await sb.from("loyalty_settings").select("*").eq("restaurant_id", restaurantId).maybeSingle();
+    queryFn: async (): Promise<Settings & { restaurants: { slug: string } }> => {
+      const { data } = await sb.from("loyalty_settings").select("*, restaurants(slug)").eq("restaurant_id", restaurantId).maybeSingle();
       return data ?? { restaurant_id: restaurantId, enabled: false, points_per_real: 1 };
     },
   });
@@ -307,7 +307,40 @@ export function LoyaltyPanel({ restaurantId, isAdmin = false }: { restaurantId: 
                 <div className="font-bold text-lg">{pointsPerReal}</div>
               </div>
             )}
-            {(canToggle || isAdmin) && <Button onClick={saveSettings}>Salvar</Button>}
+            
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-sm font-semibold">Link do Programa</Label>
+              <div className="flex gap-2">
+                <Input 
+                  readOnly 
+                  value={`${window.location.origin}/fidelidade/${settingsQ.data?.restaurants?.slug || ""}`} 
+                  className="bg-muted font-mono text-xs"
+                />
+                <Button 
+                  size="icon" 
+                  variant="outline" 
+                  onClick={() => {
+                    const url = `${window.location.origin}/fidelidade/${settingsQ.data?.restaurants?.slug || ""}`;
+                    navigator.clipboard.writeText(url);
+                    toast.success("Link copiado!");
+                  }}
+                >
+                  <Copy className="w-4 h-4" />
+                </Button>
+                <Button 
+                  size="icon" 
+                  variant="outline"
+                  asChild
+                >
+                  <a href={`/fidelidade/${settingsQ.data?.restaurants?.slug || ""}`} target="_blank" rel="noreferrer">
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">Divulgue este link para seus clientes consultarem seus pontos.</p>
+            </div>
+
+            {(canToggle || isAdmin) && <Button onClick={saveSettings} className="w-full">Salvar</Button>}
           </TabsContent>
 
           {/* Members */}
