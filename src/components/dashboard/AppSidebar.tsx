@@ -29,7 +29,6 @@ export type DashboardView =
   | "marketing:coupons"
   | "marketing:loyalty"
   | "marketing:bulk"
-  | "marketing:manual-send"
   | "settings:order-config"
   | "settings:business"
   | "settings:printers"
@@ -39,6 +38,7 @@ export type DashboardView =
   | "stock"
   | "expenses"
   | "finance";
+
 
 const mainItems: { id: DashboardView; title: string; icon: any }[] = [
   { id: "overview", title: "Visão geral", icon: LayoutDashboard },
