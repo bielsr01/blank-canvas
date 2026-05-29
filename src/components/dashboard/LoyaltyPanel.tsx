@@ -19,7 +19,17 @@ import { usePermissions } from "@/hooks/usePermissions";
 
 const sb = supabase as any;
 
-type Settings = { restaurant_id: string; enabled: boolean; points_per_real: number };
+type Settings = { 
+  restaurant_id: string; 
+  enabled: boolean; 
+  points_per_real: number;
+  public_title: string;
+  public_description: string;
+  public_rules: string;
+  button_text: string;
+  whatsapp_message: string;
+  otp_expiry_minutes: number;
+};
 type Member = { id: string; name: string; phone: string; points: number; created_at: string };
 type Tx = {
   id: string;
@@ -58,10 +68,23 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
   });
   const [enabled, setEnabled] = useState(false);
   const [pointsPerReal, setPointsPerReal] = useState("1");
+  const [publicTitle, setPublicTitle] = useState("");
+  const [publicDescription, setPublicDescription] = useState("");
+  const [publicRules, setPublicRules] = useState("");
+  const [buttonText, setButtonText] = useState("");
+  const [whatsappMessage, setWhatsappMessage] = useState("");
+  const [otpExpiry, setOtpExpiry] = useState("10");
+
   useEffect(() => {
     if (settingsQ.data) {
       setEnabled(!!settingsQ.data.enabled);
       setPointsPerReal(String(settingsQ.data.points_per_real ?? 1));
+      setPublicTitle(settingsQ.data.public_title || "Programa de Fidelidade Coxinha Surprise");
+      setPublicDescription(settingsQ.data.public_description || "Bem-vindo ao Programa de Fidelidade da Coxinha Surprise! Acumule pontos em cada compra e troque por benefícios exclusivos.");
+      setPublicRules(settingsQ.data.public_rules || "A cada R$1 gasto equivale a 1 ponto.\nOs pontos só podem ser utilizados na mesma unidade onde foi efetuada a compra.\nOs pontos só podem ser resgatados presencialmente na loja.");
+      setButtonText(settingsQ.data.button_text || "Consultar Meus Pontos");
+      setWhatsappMessage(settingsQ.data.whatsapp_message || "Seu código para consultar seus pontos é: {CODIGO}");
+      setOtpExpiry(String(settingsQ.data.otp_expiry_minutes ?? 10));
     }
   }, [settingsQ.data]);
 
@@ -69,6 +92,12 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
     const payload: any = {
       restaurant_id: restaurantId,
       enabled,
+      public_title: publicTitle,
+      public_description: publicDescription,
+      public_rules: publicRules,
+      button_text: buttonText,
+      whatsapp_message: whatsappMessage,
+      otp_expiry_minutes: Number(otpExpiry) || 10,
     };
     if (isAdmin) payload.points_per_real = Number(pointsPerReal) || 0;
     const { error } = await sb.from("loyalty_settings").upsert(payload, { onConflict: "restaurant_id" });
@@ -308,39 +337,85 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
               </div>
             )}
             
-            <div className="space-y-2 pt-2 border-t">
-              <Label className="text-sm font-semibold">Link do Programa</Label>
-              <div className="flex gap-2">
-                <Input 
-                  readOnly 
-                  value={`https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} 
-                  className="bg-muted font-mono text-xs"
-                />
-                <Button 
-                  size="icon" 
-                  variant="outline" 
-                  onClick={() => {
-                    const url = `https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`;
-                    navigator.clipboard.writeText(url);
-                    toast.success("Link copiado!");
-                  }}
-                >
-                  <Copy className="w-4 h-4" />
-                </Button>
-                <Button 
-                  size="icon" 
-                  variant="outline"
-                  asChild
-                >
-                  <a href={`https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} target="_blank" rel="noreferrer">
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
-                </Button>
+            <div className="space-y-4 pt-4 border-t">
+              <h3 className="font-semibold text-sm">Personalização da Página Pública</h3>
+              
+              <div className="space-y-2">
+                <Label>Título do Programa</Label>
+                <Input value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)} placeholder="Ex: Programa de Fidelidade Coxinha Surprise" />
               </div>
-              <p className="text-[10px] text-muted-foreground">Divulgue este link para seus clientes consultarem seus pontos.</p>
+
+              <div className="space-y-2">
+                <Label>Descrição</Label>
+                <textarea 
+                  className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  value={publicDescription} 
+                  onChange={(e) => setPublicDescription(e.target.value)} 
+                  placeholder="Explique como o programa funciona..."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Regras do Programa</Label>
+                <textarea 
+                  className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  value={publicRules} 
+                  onChange={(e) => setPublicRules(e.target.value)} 
+                  placeholder="Liste as regras (uma por linha)..."
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Texto do Botão</Label>
+                  <Input value={buttonText} onChange={(e) => setButtonText(e.target.value)} placeholder="Ex: Consultar Meus Pontos" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Expiração OTP (minutos)</Label>
+                  <Input type="number" value={otpExpiry} onChange={(e) => setOtpExpiry(e.target.value)} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Mensagem WhatsApp</Label>
+                <Input value={whatsappMessage} onChange={(e) => setWhatsappMessage(e.target.value)} placeholder="Use {CODIGO} para o código OTP" />
+                <p className="text-[10px] text-muted-foreground">O código de 6 dígitos substituirá o termo {"{CODIGO}"} na mensagem.</p>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t">
+                <Label className="text-sm font-semibold">Link do Programa</Label>
+                <div className="flex gap-2">
+                  <Input 
+                    readOnly 
+                    value={`https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} 
+                    className="bg-muted font-mono text-xs"
+                  />
+                  <Button 
+                    size="icon" 
+                    variant="outline" 
+                    onClick={() => {
+                      const url = `https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`;
+                      navigator.clipboard.writeText(url);
+                      toast.success("Link copiado!");
+                    }}
+                  >
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                  <Button 
+                    size="icon" 
+                    variant="outline"
+                    asChild
+                  >
+                    <a href={`https://app.coxinhasurprise.com/fidelidade/${restaurantSlug || settingsQ.data?.restaurants?.slug || ""}`} target="_blank" rel="noreferrer">
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  </Button>
+                </div>
+              </div>
             </div>
 
             {(canToggle || isAdmin) && <Button onClick={saveSettings} className="w-full">Salvar</Button>}
+
           </TabsContent>
 
           {/* Members */}
