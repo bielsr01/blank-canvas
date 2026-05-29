@@ -19,7 +19,17 @@ import { usePermissions } from "@/hooks/usePermissions";
 
 const sb = supabase as any;
 
-type Settings = { restaurant_id: string; enabled: boolean; points_per_real: number };
+type Settings = { 
+  restaurant_id: string; 
+  enabled: boolean; 
+  points_per_real: number;
+  public_title: string;
+  public_description: string;
+  public_rules: string;
+  button_text: string;
+  whatsapp_message: string;
+  otp_expiry_minutes: number;
+};
 type Member = { id: string; name: string; phone: string; points: number; created_at: string };
 type Tx = {
   id: string;
