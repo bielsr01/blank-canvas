@@ -68,10 +68,23 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
   });
   const [enabled, setEnabled] = useState(false);
   const [pointsPerReal, setPointsPerReal] = useState("1");
+  const [publicTitle, setPublicTitle] = useState("");
+  const [publicDescription, setPublicDescription] = useState("");
+  const [publicRules, setPublicRules] = useState("");
+  const [buttonText, setButtonText] = useState("");
+  const [whatsappMessage, setWhatsappMessage] = useState("");
+  const [otpExpiry, setOtpExpiry] = useState("10");
+
   useEffect(() => {
     if (settingsQ.data) {
       setEnabled(!!settingsQ.data.enabled);
       setPointsPerReal(String(settingsQ.data.points_per_real ?? 1));
+      setPublicTitle(settingsQ.data.public_title || "Programa de Fidelidade Coxinha Surprise");
+      setPublicDescription(settingsQ.data.public_description || "Bem-vindo ao Programa de Fidelidade da Coxinha Surprise! Acumule pontos em cada compra e troque por benefícios exclusivos.");
+      setPublicRules(settingsQ.data.public_rules || "A cada R$1 gasto equivale a 1 ponto.\nOs pontos só podem ser utilizados na mesma unidade onde foi efetuada a compra.\nOs pontos só podem ser resgatados presencialmente na loja.");
+      setButtonText(settingsQ.data.button_text || "Consultar Meus Pontos");
+      setWhatsappMessage(settingsQ.data.whatsapp_message || "Seu código para consultar seus pontos é: {CODIGO}");
+      setOtpExpiry(String(settingsQ.data.otp_expiry_minutes ?? 10));
     }
   }, [settingsQ.data]);
 
@@ -79,6 +92,12 @@ export function LoyaltyPanel({ restaurantId, restaurantSlug, isAdmin = false }: 
     const payload: any = {
       restaurant_id: restaurantId,
       enabled,
+      public_title: publicTitle,
+      public_description: publicDescription,
+      public_rules: publicRules,
+      button_text: buttonText,
+      whatsapp_message: whatsappMessage,
+      otp_expiry_minutes: Number(otpExpiry) || 10,
     };
     if (isAdmin) payload.points_per_real = Number(pointsPerReal) || 0;
     const { error } = await sb.from("loyalty_settings").upsert(payload, { onConflict: "restaurant_id" });
