@@ -14,7 +14,158 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      loyalty_members: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          phone: string
+          points: number
+          restaurant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          phone: string
+          points?: number
+          restaurant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          phone?: string
+          points?: number
+          restaurant_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      loyalty_rewards: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          name: string
+          points_cost: number
+          product_id: string | null
+          restaurant_id: string
+          stock: number | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name: string
+          points_cost: number
+          product_id?: string | null
+          restaurant_id: string
+          stock?: number | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          points_cost?: number
+          product_id?: string | null
+          restaurant_id?: string
+          stock?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      loyalty_settings: {
+        Row: {
+          button_text: string | null
+          created_at: string
+          enabled: boolean
+          otp_expiry_minutes: number | null
+          points_per_real: number
+          public_description: string | null
+          public_rules: string | null
+          public_title: string | null
+          restaurant_id: string
+          updated_at: string
+          whatsapp_message: string | null
+        }
+        Insert: {
+          button_text?: string | null
+          created_at?: string
+          enabled?: boolean
+          otp_expiry_minutes?: number | null
+          points_per_real?: number
+          public_description?: string | null
+          public_rules?: string | null
+          public_title?: string | null
+          restaurant_id: string
+          updated_at?: string
+          whatsapp_message?: string | null
+        }
+        Update: {
+          button_text?: string | null
+          created_at?: string
+          enabled?: boolean
+          otp_expiry_minutes?: number | null
+          points_per_real?: number
+          public_description?: string | null
+          public_rules?: string | null
+          public_title?: string | null
+          restaurant_id?: string
+          updated_at?: string
+          whatsapp_message?: string | null
+        }
+        Relationships: []
+      }
+      loyalty_transactions: {
+        Row: {
+          created_at: string
+          credited_at: string | null
+          id: string
+          member_id: string
+          order_id: string | null
+          points: number
+          restaurant_id: string
+          status: string
+          type: string
+        }
+        Insert: {
+          created_at?: string
+          credited_at?: string | null
+          id?: string
+          member_id: string
+          order_id?: string | null
+          points: number
+          restaurant_id: string
+          status?: string
+          type: string
+        }
+        Update: {
+          created_at?: string
+          credited_at?: string | null
+          id?: string
+          member_id?: string
+          order_id?: string | null
+          points?: number
+          restaurant_id?: string
+          status?: string
+          type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_transactions_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
