@@ -36,7 +36,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { IfoodWidgetMount } from "@/components/dashboard/IfoodWidgetMount";
 
 import { BulkCampaignsPanel } from "@/components/dashboard/BulkCampaignsPanel";
-import { ManualSendPanel } from "@/components/dashboard/ManualSendPanel";
+
 import { ManualOverride, OpeningHours } from "@/lib/hours";
 import { BrasiliaClock } from "@/components/BrasiliaClock";
 
