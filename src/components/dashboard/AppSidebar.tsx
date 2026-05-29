@@ -29,7 +29,6 @@ export type DashboardView =
   | "marketing:coupons"
   | "marketing:loyalty"
   | "marketing:bulk"
-  | "marketing:manual-send"
   | "settings:order-config"
   | "settings:business"
   | "settings:printers"
@@ -39,6 +38,7 @@ export type DashboardView =
   | "stock"
   | "expenses"
   | "finance";
+
 
 const mainItems: { id: DashboardView; title: string; icon: any }[] = [
   { id: "overview", title: "Visão geral", icon: LayoutDashboard },
@@ -50,8 +50,8 @@ const mainItems: { id: DashboardView; title: string; icon: any }[] = [
 const marketingItems: { id: DashboardView; title: string; icon: any }[] = [
   { id: "marketing:coupons", title: "Cupons de desconto", icon: Ticket },
   { id: "marketing:bulk", title: "Envio em massa", icon: Send },
-  { id: "marketing:manual-send", title: "Envio Manual", icon: Send },
 ];
+
 
 const loyaltyItem: { id: DashboardView; title: string; icon: any } = {
   id: "marketing:loyalty",
@@ -96,7 +96,7 @@ export function AppSidebar({
   const visibleMarketing = marketingItems.filter((it) => {
     if (it.id === "marketing:coupons") return !!can("marketing.coupons.view");
     if (it.id === "marketing:bulk") return !!can("marketing.bulk.view");
-    if (it.id === "marketing:manual-send") return !!can("marketing.manual_send.view");
+    return true;
     return true;
   });
   const visibleSettings = settingsItems.filter((it) => {
